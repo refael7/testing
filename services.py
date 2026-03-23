@@ -1,12 +1,11 @@
+# services.py
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime, timezone
 
-
-def count_alarms_for_city_optimized(target_timestamp: str, city_name: str):
-    target_dt = datetime.fromisoformat(target_timestamp.replace("Z", "+00:00")).replace(
-        minute=0, second=0, microsecond=0
-    )
-
+def fetch_all_alarms_for_month(year: int, month: int):
+    """
+    מושך את כל האזעקות של החודש הנבחר, בצורה יעילה עם pagination.
+    """
     url = "https://redalert.orielhaim.com/api/stats/history"
     headers = {
         "Authorization": "Bearer pr_TwGtUQvnMgnWbYTRHOnwrGcKuZvDqppALWqwWdoJLSpfvsUYGNiyOfVwWoPBrOdr",
@@ -16,72 +15,71 @@ def count_alarms_for_city_optimized(target_timestamp: str, city_name: str):
 
     limit = 100
     offset = 0
-    count = 0
-    done = False
+    all_alarms = []
 
-    while not done:
-        params = {"city": city_name, "limit": limit, "offset": offset}
-        response = requests.get(url, headers=headers, params=params, timeout=5)
+    start_date = datetime(year, month, 1, tzinfo=timezone.utc)
+    if month == 12:
+        end_date = datetime(year + 1, 1, 1, tzinfo=timezone.utc)
+    else:
+        end_date = datetime(year, month + 1, 1, tzinfo=timezone.utc)
+
+    params = {
+        "limit": limit,
+        "offset": offset,
+        "start": start_date.isoformat(),
+        "end": end_date.isoformat()
+    }
+
+    while True:
+        params["offset"] = offset
+        response = requests.get(url, headers=headers, params=params, timeout=10)
         response.raise_for_status()
         data = response.json()
         alarms = data.get("data", [])
-
         if not alarms:
             break
 
         for alarm in alarms:
-            alarm_dt = datetime.fromisoformat(alarm["timestamp"].replace("Z", "+00:00")).replace(
-                minute=0, second=0, microsecond=0
-            )
-
-            if alarm_dt < target_dt:
-                done = True
-                break
-
-            if alarm_dt == target_dt:
-                for city in alarm.get("cities", []):
-                    if city["name"] == city_name:
-                        count += 1
+            alarm_dt = datetime.fromisoformat(alarm["timestamp"].replace("Z", "+00:00")).astimezone(timezone.utc)
+            if start_date <= alarm_dt < end_date:
+                all_alarms.append(alarm)
 
         offset += limit
         if not data.get("pagination", {}).get("hasMore", False):
             break
 
-    return count
+    return all_alarms
 
 
-# 👇 הפונקציה החדשה שמשתמשת בקיימת
 def average_from_front_input(target_timestamp: str, city_name: str):
-    dt = datetime.fromisoformat(target_timestamp.replace("Z", "+00:00"))
-
+    """
+    מחשב ממוצע יומי של אזעקות לפי שעה לעיר מסוימת.
+    """
+    dt = datetime.fromisoformat(target_timestamp.replace("Z", "+00:00")).astimezone(timezone.utc)
     year = dt.year
     month = dt.month
     hour = dt.hour
 
-    counts = []
+    alarms = fetch_all_alarms_for_month(year, month)
+    daily_counts = {}
 
-    day = datetime(year, month, 1)
+    for alarm in alarms:
+        alarm_dt = datetime.fromisoformat(alarm["timestamp"].replace("Z", "+00:00")).astimezone(timezone.utc)
+        if alarm_dt.hour != hour:
+            continue
+        if not any(city["name"] == city_name for city in alarm.get("cities", [])):
+            continue
+        day = alarm_dt.day
+        daily_counts[day] = daily_counts.get(day, 0) + 1
+
+    start_month = datetime(year, month, 1, tzinfo=timezone.utc)
     if month == 12:
-        next_month = datetime(year + 1, 1, 1)
+        next_month = datetime(year + 1, 1, 1, tzinfo=timezone.utc)
     else:
-        next_month = datetime(year, month + 1, 1)
+        next_month = datetime(year, month + 1, 1, tzinfo=timezone.utc)
+    days_in_month = (next_month - start_month).days
 
-    delta = timedelta(days=1)
+    counts_list = [daily_counts.get(day, 0) for day in range(1, days_in_month + 1)]
+    average = sum(counts_list) / len(counts_list) if counts_list else 0
 
-    while day < next_month:
-        daily_timestamp = day.replace(
-            hour=hour, minute=0, second=0, microsecond=0
-        ).isoformat() + "Z"
-
-        count = count_alarms_for_city_optimized(daily_timestamp, city_name)
-        counts.append(count)
-
-        day += delta
-
-    average = sum(counts) / len(counts) if counts else 0
-
-    return {
-        "average": average,
-        "daily_counts": counts
-    }
-
+    return {"average": average, "daily_counts": counts_list}
