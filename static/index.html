@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SafeRoute - האם כדאי לנסוע?</title>
+
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Assistant:wght@300;400;700&display=swap" rel="stylesheet">
+
+    <style>
+        :root {
+            --primary: #e67e22; /* כתום חם */
+            --bg-warm: #fdf8f5; /* קרם חמים */
+            --text-dark: #4a3728; /* חום שוקולד */
+            --accent: #d35400;
+        }
+
+        body {
+            font-family: 'Assistant', sans-serif;
+            background-color: var(--bg-warm);
+            color: var(--text-dark);
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+        }
+
+        .main-container {
+            display: grid;
+            grid-template-columns: 400px 1fr;
+            gap: 25px;
+            width: 95%;
+            max-width: 1300px;
+            background: white;
+            padding: 30px;
+            border-radius: 25px;
+            box-shadow: 0 15px 40px rgba(74, 55, 40, 0.1);
+        }
+
+        .side-panel {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            border-left: 1px solid #eee;
+            padding-left: 20px;
+        }
+
+        h1 { color: var(--accent); margin-bottom: 5px; font-size: 2rem; }
+        .subtitle { font-size: 0.9rem; margin-bottom: 20px; opacity: 0.7; }
+
+        .input-group { display: flex; flex-direction: column; gap: 5px; }
+        label { font-size: 0.9rem; font-weight: bold; }
+
+        input {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #f1ece9;
+            border-radius: 12px;
+            font-size: 16px;
+            box-sizing: border-box;
+            background-color: #fafafa;
+            transition: all 0.3s;
+        }
+
+        input:focus { border-color: var(--primary); outline: none; background: #fff; }
+
+        button {
+            background-color: var(--primary);
+            color: white;
+            padding: 15px;
+            border: none;
+            border-radius: 12px;
+            cursor: pointer;
+            font-size: 18px;
+            font-weight: bold;
+            transition: transform 0.2s, background 0.3s;
+            margin-top: 10px;
+        }
+
+        button:hover { background-color: var(--accent); transform: translateY(-2px); }
+
+        #result {
+            margin-top: 10px;
+            padding: 20px;
+            border-radius: 15px;
+            display: none;
+            animation: fadeIn 0.5s;
+        }
+
+        .risk-low { background-color: #f0fff4; border: 1px solid #c6f6d5; color: #276749; }
+        .risk-medium { background-color: #fffaf0; border: 1px solid #fef3c7; color: #975a16; }
+        .risk-high { background-color: #fff5f5; border: 1px solid #fed7d7; color: #9b2c2c; }
+
+        /* עיצוב לאזור הגרף */
+        #graph-container {
+            margin-top: 20px;
+            background: #fffcf9;
+            padding: 15px;
+            border-radius: 15px;
+            display: none; /* יופיע רק אחרי חישוב */
+            border: 1px solid #eee;
+        }
+
+        #map {
+            height: 100%;
+            min-height: 600px;
+            width: 100%;
+            border-radius: 18px;
+            z-index: 1;
+        }
+
+        .alerts-section {
+            margin-top: auto;
+            background: #fff9f5;
+            padding: 15px;
+            border-radius: 12px;
+        }
+
+        .alerts-box {
+            max-height: 100px;
+            overflow-y: auto;
+            font-size: 0.8em;
+            text-align: right;
+        }
+
+        .loader {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid var(--primary);
+            border-radius: 50%;
+            width: 18px; height: 18px;
+            animation: spin 1s linear infinite;
+            display: inline-block;
+            margin-left: 10px;
+        }
+
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+
+        @media (max-width: 900px) {
+            .main-container { grid-template-columns: 1fr; }
+            .side-panel { border-left: none; padding-left: 0; }
+            #map { min-height: 350px; }
+        }
+    </style>
+</head>
+<body>
+
+<div class="main-container">
+    <div class="side-panel">
+        <h1>SafeRoute 🚗</h1>
+        <p class="subtitle">ניתוח סיכונים לפי נתוני 30 יום</p>
+
+        <input type="text" id="origin" placeholder="עיר מוצא (אלעד)">
+        <input type="text" id="dest" placeholder="עיר יעד (בני ברק)">
+
+        <div class="input-group">
+            <label>שעת יציאה (אופציונלי):</label>
+            <input type="time" id="departure_time">
+        </div>
+
+        <button id="checkBtn" onclick="checkRisk()">חשב סיכון עכשיו</button>
+
+        <div id="result"></div>
+
+        <div id="graph-container">
+            <h4 style="margin: 0 0 10px 0; font-size: 0.9rem;">התפלגות אזעקות לפי שעה:</h4>
+            <canvas id="riskChart"></canvas>
+        </div>
+
+        <div class="alerts-section">
+            <h4 style="margin: 0 0 5px 0;">אזעקות אחרונות:</h4>
+            <div id="latest-alerts" class="alerts-box">טוען...</div>
+        </div>
+    </div>
+
+    <div id="map"></div>
+</div>
+
+<script>
+    var map = L.map('map').setView([32.0853, 34.8818], 10);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OpenStreetMap' }).addTo(map);
+
+    let myChart; // משתנה גלובלי לגרף
+
+    async function loadLatestAlerts() {
+        try {
+            const response = await fetch('./debug/alerts');
+            const data = await response.json();
+            const list = document.getElementById('latest-alerts');
+            list.innerHTML = data.map(a => `<div style="border-bottom: 1px solid #eee; padding: 3px 0;"><strong>${a.date.split('T')[1].substring(0,5)}</strong> | ${a.city}</div>`).join('');
+        } catch (e) { document.getElementById('latest-alerts').innerHTML = "שגיאה בטעינה"; }
+    }
+
+    async function checkRisk() {
+        const origin = document.getElementById('origin').value.trim();
+        const dest = document.getElementById('dest').value.trim();
+        const manualTime = document.getElementById('departure_time').value;
+        const resultDiv = document.getElementById('result');
+        const btn = document.getElementById('checkBtn');
+
+        if (!origin || !dest) return alert("הזן מוצא ויעד");
+
+        btn.disabled = true;
+        btn.innerHTML = '<span class="loader"></span>מחשב...';
+
+        try {
+            // 1. קריאה לחישוב הסיכון (כולל השעה הידנית)
+            let url = `./calculate_risk?origin=${encodeURIComponent(origin)}&destination=${encodeURIComponent(dest)}`;
+            if (manualTime) url += `&manual_time=${manualTime}`;
+
+            const response = await fetch(url);
+            const data = await response.json();
+
+            const score = data.risk_score_int || 0;
+            let riskClass = score > 60 ? "risk-high" : (score > 20 ? "risk-medium" : "risk-low");
+
+            resultDiv.className = riskClass;
+            resultDiv.style.display = "block";
+            resultDiv.innerHTML = `
+                <div style="font-size: 1.8rem; font-weight: bold;">${data.risk_score}</div>
+                <div style="margin: 8px 0;">${data.recommendation}</div>
+                <div style="font-size: 0.85rem; border-top: 1px solid rgba(0,0,0,0.05); padding-top: 10px;">
+                    ⏰ זמן בדיקה: <strong>${data.current_time}</strong>
+                </div>
+            `;
+
+            // 2. קריאה לנתוני הגרף
+            loadGraph(origin, dest);
+
+        } catch (e) {
+            resultDiv.style.display = "block";
+            resultDiv.className = "risk-high";
+            resultDiv.innerHTML = "שגיאה בחיבור לשרת";
+        } finally {
+            btn.disabled = false;
+            btn.innerHTML = "חשב סיכון עכשיו";
+        }
+    }
+
+    async function loadGraph(origin, dest) {
+        try {
+            const response = await fetch(`./route_stats?origin=${encodeURIComponent(origin)}&destination=${encodeURIComponent(dest)}`);
+            const stats = await response.json();
+
+            document.getElementById('graph-container').style.display = "block";
+            const ctx = document.getElementById('riskChart').getContext('2d');
+
+            if (myChart) myChart.destroy(); // ניקוי גרף ישן
+
+            myChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: stats.map(s => s.hour),
+                    datasets: [{
+                        label: 'כמות אזעקות (30 יום)',
+                        data: stats.map(s => s.count),
+                        backgroundColor: '#e67e22',
+                        borderRadius: 5
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    plugins: { legend: { display: false } },
+                    scales: { y: { beginAtZero: true, ticks: { precision: 0 } } }
+                }
+            });
+        } catch (e) { console.error("שגיאה בטעינת הגרף", e); }
+    }
+
+    loadLatestAlerts();
+    setInterval(loadLatestAlerts, 30000);
+</script>
+</body>
+</html>
